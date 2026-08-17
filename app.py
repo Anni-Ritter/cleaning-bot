@@ -455,6 +455,30 @@ def chore_keyboard(chore: str, member_id: int):
     )
 
 
+
+def manual_done_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🧹 Пол",
+                    callback_data="manual_done:floor",
+                ),
+                InlineKeyboardButton(
+                    text="🛁 Ванная",
+                    callback_data="manual_done:bathroom",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="manual_done:cancel",
+                )
+            ],
+        ]
+    )
+
+
 def settings_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -510,6 +534,100 @@ async def deny_if_not_member(event):
     return True
 
 
+
+def manual_complete_chore(chore: str, user_id: int):
+    if chore not in CHORES:
+        return False, "Неизвестная задача.", None
+
+    queue_member = get_queue_member(chore)
+
+    if queue_member["id"] != user_id:
+        return (
+            False,
+            f"Сейчас очередь: {queue_member['name']}. "
+            "Отметить выполнение может только текущий дежурный.",
+            None,
+        )
+
+    iso_year, iso_week = week_now()
+
+    if chore == "floor":
+        row = fetch_one(
+            """
+            SELECT user_id, user_name, status
+            FROM weekly_tasks
+            WHERE iso_year = :year AND iso_week = :week AND chore = 'floor'
+            """,
+            {"year": iso_year, "week": iso_week},
+        )
+
+        if row and row["status"] == "done":
+            return False, "Пол на этой неделе уже отмечен как выполненный.", None
+
+        if row:
+            execute(
+                """
+                UPDATE weekly_tasks
+                SET user_id = :uid, user_name = :name, status = 'done'
+                WHERE iso_year = :year AND iso_week = :week AND chore = 'floor'
+                """,
+                {
+                    "uid": queue_member["id"],
+                    "name": queue_member["name"],
+                    "year": iso_year,
+                    "week": iso_week,
+                },
+            )
+        else:
+            execute(
+                """
+                INSERT INTO weekly_tasks
+                (iso_year, iso_week, chore, user_id, user_name, status)
+                VALUES (:year, :week, 'floor', :uid, :name, 'done')
+                """,
+                {
+                    "year": iso_year,
+                    "week": iso_week,
+                    "uid": queue_member["id"],
+                    "name": queue_member["name"],
+                },
+            )
+
+    else:
+        row = fetch_one(
+            """
+            SELECT status
+            FROM weekly_tasks
+            WHERE iso_year = :year AND iso_week = :week AND chore = 'bathroom'
+            """,
+            {"year": iso_year, "week": iso_week},
+        )
+
+        if row and row["status"] == "done":
+            return False, "Ванная на этой неделе уже отмечена как выполненная.", None
+
+        if row:
+            execute(
+                """
+                UPDATE weekly_tasks
+                SET user_id = :uid, user_name = :name, status = 'done'
+                WHERE iso_year = :year AND iso_week = :week AND chore = 'bathroom'
+                """,
+                {
+                    "uid": queue_member["id"],
+                    "name": queue_member["name"],
+                    "year": iso_year,
+                    "week": iso_week,
+                },
+            )
+
+    record_event(chore, queue_member, "done")
+    advance_turn(chore)
+    next_member = get_queue_member(chore)
+
+    return True, None, next_member
+
+
 async def send_chore_message(chore: str, prefix: str, iso_year: int, iso_week: int):
     task = get_or_create_weekly_task(chore, iso_year, iso_week)
     if not task or task["status"] == "done":
@@ -537,6 +655,7 @@ async def start_cmd(message: Message):
         "/status — текущие очереди\n"
         "/history — история\n"
         "/settings — настроить очереди и ванную\n"
+        "/done — отметить уборку вручную\n"
         "/test — прислать тестовые задачи"
     )
 
@@ -760,6 +879,66 @@ async def bathroom_interval_cmd(message: Message, state: FSMContext):
     await message.answer(
         f"Сейчас: <b>{current} дней</b>. Выбери новый интервал:",
         reply_markup=interval_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+
+@dp.message(Command("done"))
+async def manual_done_cmd(message: Message):
+    if await deny_if_not_member(message):
+        return
+
+    await message.answer(
+        "✅ <b>Что ты уже убрал(а)?</b>\n\n"
+        "Отметить выполнение может только тот, чья сейчас очередь.",
+        reply_markup=manual_done_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data == "manual_done:cancel")
+async def manual_done_cancel(callback: CallbackQuery):
+    await callback.answer("Отменено")
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+
+@dp.callback_query(F.data.startswith("manual_done:"))
+async def manual_done_callback(callback: CallbackQuery):
+    if await deny_if_not_member(callback):
+        return
+
+    chore = callback.data.split(":", 1)[1]
+    if chore not in CHORES:
+        return
+
+    ok, error, next_member = manual_complete_chore(
+        chore,
+        callback.from_user.id,
+    )
+
+    if not ok:
+        await callback.answer(error, show_alert=True)
+        return
+
+    current_member = MEMBERS_BY_ID[callback.from_user.id]
+    await callback.answer("Отмечено!")
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    extra = ""
+    if chore == "bathroom":
+        next_due = next_bathroom_due_at()
+        if next_due:
+            extra = (
+                f"\nСледующая ванная станет актуальной после "
+                f"<b>{next_due:%d.%m.%Y}</b>."
+            )
+
+    await callback.message.answer(
+        f"✅ {mention(current_member)} отметил(а): "
+        f"<b>{CHORES[chore]['title']}</b> выполнено.\n"
+        f"Следующий в очереди: {mention(next_member)}."
+        f"{extra}",
         parse_mode="HTML",
     )
 
