@@ -3,7 +3,6 @@ import os
 import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -19,68 +18,47 @@ from aiogram.types import (
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-
 load_dotenv()
-
 LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
-
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "local-secret")
 SCHEDULER_KEY = os.getenv("SCHEDULER_KEY", "local-scheduler-key")
 BOT_PROXY = os.getenv("BOT_PROXY")
-
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
 TZ = ZoneInfo(TIMEZONE)
-
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///cleaning.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
 DEFAULT_BATHROOM_INTERVAL_DAYS = int(os.getenv("BATHROOM_INTERVAL_DAYS", "14"))
-
 FRIDAY_ANNOUNCE_START_HOUR = int(os.getenv("FRIDAY_ANNOUNCE_START_HOUR", "17"))
 FRIDAY_ANNOUNCE_END_HOUR = int(os.getenv("FRIDAY_ANNOUNCE_END_HOUR", "20"))
-
 SATURDAY_REMINDER_START_HOUR = int(os.getenv("SATURDAY_REMINDER_START_HOUR", "10"))
 SATURDAY_REMINDER_END_HOUR = int(os.getenv("SATURDAY_REMINDER_END_HOUR", "12"))
-
 SUNDAY_REMINDER_START_HOUR = int(os.getenv("SUNDAY_REMINDER_START_HOUR", "11"))
 SUNDAY_REMINDER_END_HOUR = int(os.getenv("SUNDAY_REMINDER_END_HOUR", "13"))
-
 SUNDAY_FINAL_START_HOUR = int(os.getenv("SUNDAY_FINAL_START_HOUR", "17"))
 SUNDAY_FINAL_END_HOUR = int(os.getenv("SUNDAY_FINAL_END_HOUR", "20"))
-
 MEMBERS = []
 for key in ("USER_1", "USER_2", "USER_3"):
     raw = os.environ[key]
     user_id, name = raw.split("|", 1)
     MEMBERS.append({"id": int(user_id), "name": name.strip()})
-
 MEMBERS_BY_ID = {member["id"]: member for member in MEMBERS}
-
 CHORES = {
     "floor": {"title": "мытьё пола", "short": "Пол", "emoji": "🧹"},
     "bathroom": {"title": "уборка ванной", "short": "Ванная", "emoji": "🛁"},
 }
-
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-
 session = AiohttpSession(proxy=BOT_PROXY) if BOT_PROXY else AiohttpSession()
 bot = Bot(BOT_TOKEN, session=session)
 dp = Dispatcher()
-
-
 class SetupQueue(StatesGroup):
     choosing_first = State()
     choosing_second = State()
-
-
 class BathroomInterval(StatesGroup):
     waiting_custom_days = State()
-
-
 def init_db():
     ddl = [
         """
@@ -126,7 +104,6 @@ def init_db():
         )
         """,
     ]
-
     if DATABASE_URL.startswith("sqlite"):
         ddl[0] = """
         CREATE TABLE IF NOT EXISTS chore_events (
@@ -138,11 +115,9 @@ def init_db():
             created_at VARCHAR(64) NOT NULL
         )
         """
-
     with engine.begin() as conn:
         for statement in ddl:
             conn.execute(text(statement))
-
         for chore in CHORES:
             count = conn.execute(
                 text("SELECT COUNT(*) FROM chore_queue WHERE chore = :chore"),
@@ -165,7 +140,6 @@ def init_db():
                             "name": member["name"],
                         },
                     )
-
         interval_exists = conn.execute(
             text(
                 "SELECT setting_value FROM bot_settings "
@@ -182,35 +156,23 @@ def init_db():
                 ),
                 {"value": str(DEFAULT_BATHROOM_INTERVAL_DAYS)},
             )
-
-
 def fetch_one(query, params=None):
     with engine.begin() as conn:
         return conn.execute(text(query), params or {}).mappings().first()
-
-
 def fetch_all(query, params=None):
     with engine.begin() as conn:
         return list(conn.execute(text(query), params or {}).mappings().all())
-
-
 def execute(query, params=None):
     with engine.begin() as conn:
         conn.execute(text(query), params or {})
-
-
 def is_household_member(user_id: int) -> bool:
     return user_id in MEMBERS_BY_ID
-
-
 def get_setting(key: str, default=None):
     row = fetch_one(
         "SELECT setting_value FROM bot_settings WHERE setting_key = :key",
         {"key": key},
     )
     return row["setting_value"] if row else default
-
-
 def set_setting(key: str, value: str):
     if DATABASE_URL.startswith("sqlite"):
         execute(
@@ -231,12 +193,8 @@ def set_setting(key: str, value: str):
             """,
             {"key": key, "value": value},
         )
-
-
 def get_bathroom_interval_days() -> int:
     return int(get_setting("bathroom_interval_days", str(DEFAULT_BATHROOM_INTERVAL_DAYS)))
-
-
 def get_queue(chore: str):
     rows = fetch_all(
         """
@@ -248,8 +206,6 @@ def get_queue(chore: str):
         {"chore": chore},
     )
     return [{"id": int(row["user_id"]), "name": row["user_name"]} for row in rows]
-
-
 def set_queue(chore: str, ordered_members):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM chore_queue WHERE chore = :chore"), {"chore": chore})
@@ -269,17 +225,11 @@ def set_queue(chore: str, ordered_members):
                     "name": member["name"],
                 },
             )
-
-
 def get_queue_member(chore: str):
     return get_queue(chore)[0]
-
-
 def advance_turn(chore: str):
     queue = get_queue(chore)
     set_queue(chore, queue[1:] + queue[:1])
-
-
 def reset_current_week_task(chore: str):
     year, week = week_now()
     execute(
@@ -289,9 +239,15 @@ def reset_current_week_task(chore: str):
         """,
         {"year": year, "week": week, "chore": chore},
     )
-
-
-def record_event(chore: str, member, event_type: str):
+def record_event(
+    chore: str,
+    member,
+    event_type: str,
+    occurred_at: datetime | None = None,
+):
+    occurred_at = occurred_at or datetime.now(TZ)
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=TZ)
     execute(
         """
         INSERT INTO chore_events
@@ -303,11 +259,9 @@ def record_event(chore: str, member, event_type: str):
             "uid": member["id"],
             "name": member["name"],
             "event_type": event_type,
-            "created_at": datetime.now(TZ).isoformat(),
+            "created_at": occurred_at.astimezone(TZ).isoformat(),
         },
     )
-
-
 def get_last_bathroom_done():
     row = fetch_one(
         """
@@ -321,35 +275,41 @@ def get_last_bathroom_done():
     if not row:
         return None
     return datetime.fromisoformat(row["created_at"]).astimezone(TZ)
-
-
 def bathroom_due() -> bool:
     last_done = get_last_bathroom_done()
     if last_done is None:
         return True
     return datetime.now(TZ) >= last_done + timedelta(days=get_bathroom_interval_days())
-
-
 def next_bathroom_due_at():
     last_done = get_last_bathroom_done()
     if last_done is None:
         return None
     return last_done + timedelta(days=get_bathroom_interval_days())
-
-
+def bathroom_due_this_week(reference: datetime | None = None) -> bool:
+    reference = reference or datetime.now(TZ)
+    next_due = next_bathroom_due_at()
+    if next_due is None:
+        return True
+    days_until_sunday = 6 - reference.weekday()
+    end_of_week = (
+        reference + timedelta(days=days_until_sunday)
+    ).replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=999999,
+    )
+    return next_due <= end_of_week
 def chore_due(chore: str) -> bool:
-    return chore == "floor" or (chore == "bathroom" and bathroom_due())
-
-
+    return chore == "floor" or (
+        chore == "bathroom" and bathroom_due_this_week()
+    )
 def week_now():
     iso = datetime.now(TZ).isocalendar()
     return iso.year, iso.week
-
-
 def get_or_create_weekly_task(chore: str, iso_year: int, iso_week: int):
     if not chore_due(chore):
         return None
-
     row = fetch_one(
         """
         SELECT user_id, user_name, status
@@ -364,7 +324,6 @@ def get_or_create_weekly_task(chore: str, iso_year: int, iso_week: int):
             "name": row["user_name"],
             "status": row["status"],
         }
-
     member = get_queue_member(chore)
     execute(
         """
@@ -381,8 +340,6 @@ def get_or_create_weekly_task(chore: str, iso_year: int, iso_week: int):
         },
     )
     return {**member, "status": "pending"}
-
-
 def set_weekly_done(chore: str, iso_year: int, iso_week: int):
     execute(
         """
@@ -391,8 +348,6 @@ def set_weekly_done(chore: str, iso_year: int, iso_week: int):
         """,
         {"year": iso_year, "week": iso_week, "chore": chore},
     )
-
-
 def reassign_weekly_task(chore: str, iso_year: int, iso_week: int, member):
     execute(
         """
@@ -408,15 +363,11 @@ def reassign_weekly_task(chore: str, iso_year: int, iso_week: int, member):
             "chore": chore,
         },
     )
-
-
 def notification_already_sent(key: str) -> bool:
     return fetch_one(
         "SELECT notification_key FROM sent_notifications WHERE notification_key = :key",
         {"key": key},
     ) is not None
-
-
 def mark_notification_sent(key: str):
     if DATABASE_URL.startswith("sqlite"):
         execute(
@@ -435,27 +386,56 @@ def mark_notification_sent(key: str):
             """,
             {"key": key, "sent_at": datetime.now(TZ).isoformat()},
         )
-
-
 def mention(member):
     return f'<a href="tg://user?id={member["id"]}">{member["name"]}</a>'
-
-
 def format_queue(chore: str):
     queue = get_queue(chore)
     return " → ".join(member["name"] for member in queue) + " → …"
-
-
-def chore_keyboard(chore: str, member_id: int):
+def chore_keyboard(chore: str, member_id: int, iso_year: int, iso_week: int):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Сделано", callback_data=f"done:{chore}:{member_id}")],
-            [InlineKeyboardButton(text="⏭️ Пропускаю очередь", callback_data=f"skip:{chore}:{member_id}")],
+            [
+                InlineKeyboardButton(
+                    text="✅ Сделано",
+                    callback_data=f"done:{chore}:{member_id}:{iso_year}:{iso_week}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⏭️ Пропускаю очередь",
+                    callback_data=f"skip:{chore}:{member_id}:{iso_year}:{iso_week}",
+                )
+            ],
         ]
     )
 
 
+def parse_task_callback(callback_data: str, message_date: datetime):
+    """Возвращает action, chore, user_id, iso_year, iso_week.
 
+    Новые кнопки содержат неделю прямо в callback_data. Для старых сообщений,
+    созданных предыдущей версией бота, неделя восстанавливается по дате сообщения.
+    """
+    parts = callback_data.split(":")
+
+    if len(parts) == 5:
+        action, chore, user_id_raw, year_raw, week_raw = parts
+        try:
+            return action, chore, int(user_id_raw), int(year_raw), int(week_raw)
+        except ValueError:
+            return None
+
+    if len(parts) == 3:
+        action, chore, user_id_raw = parts
+        try:
+            user_id = int(user_id_raw)
+        except ValueError:
+            return None
+
+        message_iso = message_date.astimezone(TZ).isocalendar()
+        return action, chore, user_id, message_iso.year, message_iso.week
+
+    return None
 def manual_done_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -477,8 +457,27 @@ def manual_done_keyboard():
             ],
         ]
     )
-
-
+def manual_done_date_keyboard(chore: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Сегодня",
+                    callback_data=f"manual_done_date:{chore}:today",
+                ),
+                InlineKeyboardButton(
+                    text="Вчера",
+                    callback_data=f"manual_done_date:{chore}:yesterday",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="manual_done:cancel",
+                )
+            ],
+        ]
+    )
 def settings_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -488,8 +487,6 @@ def settings_keyboard():
             [InlineKeyboardButton(text="📊 Показать текущие настройки", callback_data="settings:show")],
         ]
     )
-
-
 def member_choice_keyboard(prefix: str, exclude_id=None):
     rows = []
     for member in MEMBERS:
@@ -503,8 +500,6 @@ def member_choice_keyboard(prefix: str, exclude_id=None):
         ])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="settings:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def interval_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -521,8 +516,6 @@ def interval_keyboard():
             [InlineKeyboardButton(text="❌ Отмена", callback_data="settings:cancel")],
         ]
     )
-
-
 async def deny_if_not_member(event):
     user_id = event.from_user.id
     if is_household_member(user_id):
@@ -532,15 +525,38 @@ async def deny_if_not_member(event):
     else:
         await event.answer("Настройки доступны только участникам квартиры.")
     return True
-
-
-
-def manual_complete_chore(chore: str, user_id: int):
+def manual_complete_chore(
+    chore: str,
+    user_id: int,
+    completed_at: datetime,
+):
     if chore not in CHORES:
         return False, "Неизвестная задача.", None
-
+    iso = completed_at.astimezone(TZ).isocalendar()
+    iso_year = iso.year
+    iso_week = iso.week
+    # Сначала проверяем, не закрыта ли уже именно эта неделя.
+    row = fetch_one(
+        """
+        SELECT user_id, user_name, status
+        FROM weekly_tasks
+        WHERE iso_year = :year
+          AND iso_week = :week
+          AND chore = :chore
+        """,
+        {
+            "year": iso_year,
+            "week": iso_week,
+            "chore": chore,
+        },
+    )
+    if row and row["status"] == "done":
+        return (
+            False,
+            "Эта уборка за выбранную неделю уже отмечена.",
+            None,
+        )
     queue_member = get_queue_member(chore)
-
     if queue_member["id"] != user_id:
         return (
             False,
@@ -548,91 +564,90 @@ def manual_complete_chore(chore: str, user_id: int):
             "Отметить выполнение может только текущий дежурный.",
             None,
         )
-
-    iso_year, iso_week = week_now()
-
-    if chore == "floor":
-        row = fetch_one(
+    if row:
+        execute(
             """
-            SELECT user_id, user_name, status
-            FROM weekly_tasks
-            WHERE iso_year = :year AND iso_week = :week AND chore = 'floor'
+            UPDATE weekly_tasks
+            SET user_id = :uid,
+                user_name = :name,
+                status = 'done'
+            WHERE iso_year = :year
+              AND iso_week = :week
+              AND chore = :chore
             """,
-            {"year": iso_year, "week": iso_week},
+            {
+                "uid": queue_member["id"],
+                "name": queue_member["name"],
+                "year": iso_year,
+                "week": iso_week,
+                "chore": chore,
+            },
         )
-
-        if row and row["status"] == "done":
-            return False, "Пол на этой неделе уже отмечен как выполненный.", None
-
-        if row:
-            execute(
-                """
-                UPDATE weekly_tasks
-                SET user_id = :uid, user_name = :name, status = 'done'
-                WHERE iso_year = :year AND iso_week = :week AND chore = 'floor'
-                """,
-                {
-                    "uid": queue_member["id"],
-                    "name": queue_member["name"],
-                    "year": iso_year,
-                    "week": iso_week,
-                },
-            )
-        else:
-            execute(
-                """
-                INSERT INTO weekly_tasks
-                (iso_year, iso_week, chore, user_id, user_name, status)
-                VALUES (:year, :week, 'floor', :uid, :name, 'done')
-                """,
-                {
-                    "year": iso_year,
-                    "week": iso_week,
-                    "uid": queue_member["id"],
-                    "name": queue_member["name"],
-                },
-            )
-
     else:
-        row = fetch_one(
+        execute(
             """
-            SELECT status
-            FROM weekly_tasks
-            WHERE iso_year = :year AND iso_week = :week AND chore = 'bathroom'
+            INSERT INTO weekly_tasks
+            (
+                iso_year,
+                iso_week,
+                chore,
+                user_id,
+                user_name,
+                status
+            )
+            VALUES (
+                :year,
+                :week,
+                :chore,
+                :uid,
+                :name,
+                'done'
+            )
             """,
-            {"year": iso_year, "week": iso_week},
+            {
+                "year": iso_year,
+                "week": iso_week,
+                "chore": chore,
+                "uid": queue_member["id"],
+                "name": queue_member["name"],
+            },
+        )
+    record_event(
+        chore,
+        queue_member,
+        "done",
+        occurred_at=completed_at,
+    )
+    advance_turn(chore)
+
+    current_year, current_week = week_now()
+
+    # Если уборку отметили задним числом за прошлую неделю, /status мог уже
+    # успеть создать pending-задачу новой недели на прежнего дежурного.
+    # Удаляем только такую незакрытую задачу, чтобы она создалась заново
+    # уже на следующего человека из очереди.
+    if (iso_year, iso_week) != (current_year, current_week):
+        execute(
+            """
+            DELETE FROM weekly_tasks
+            WHERE iso_year = :year
+              AND iso_week = :week
+              AND chore = :chore
+              AND status = 'pending'
+            """,
+            {
+                "year": current_year,
+                "week": current_week,
+                "chore": chore,
+            },
         )
 
-        if row and row["status"] == "done":
-            return False, "Ванная на этой неделе уже отмечена как выполненная.", None
-
-        if row:
-            execute(
-                """
-                UPDATE weekly_tasks
-                SET user_id = :uid, user_name = :name, status = 'done'
-                WHERE iso_year = :year AND iso_week = :week AND chore = 'bathroom'
-                """,
-                {
-                    "uid": queue_member["id"],
-                    "name": queue_member["name"],
-                    "year": iso_year,
-                    "week": iso_week,
-                },
-            )
-
-    record_event(chore, queue_member, "done")
-    advance_turn(chore)
     next_member = get_queue_member(chore)
-
     return True, None, next_member
-
-
 async def send_chore_message(chore: str, prefix: str, iso_year: int, iso_week: int):
     task = get_or_create_weekly_task(chore, iso_year, iso_week)
     if not task or task["status"] == "done":
         return False
-
     data = CHORES[chore]
     await bot.send_message(
         CHAT_ID,
@@ -642,12 +657,10 @@ async def send_chore_message(chore: str, prefix: str, iso_year: int, iso_week: i
             f"Дежурит: {mention(task)}\n\n"
             "Когда закончишь — нажми «✅ Сделано»."
         ),
-        reply_markup=chore_keyboard(chore, task["id"]),
+        reply_markup=chore_keyboard(chore, task["id"], iso_year, iso_week),
         parse_mode="HTML",
     )
     return True
-
-
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     await message.answer(
@@ -658,16 +671,12 @@ async def start_cmd(message: Message):
         "/done — отметить уборку вручную\n"
         "/test — прислать тестовые задачи"
     )
-
-
 @dp.message(Command("settings"))
 async def settings_cmd(message: Message, state: FSMContext):
     if await deny_if_not_member(message):
         return
     await state.clear()
     await message.answer("⚙️ <b>Настройки уборки</b>", reply_markup=settings_keyboard(), parse_mode="HTML")
-
-
 @dp.callback_query(F.data == "settings:show")
 async def settings_show(callback: CallbackQuery):
     if await deny_if_not_member(callback):
@@ -684,8 +693,6 @@ async def settings_show(callback: CallbackQuery):
         f"⏰ Следующая ванная: {due_text}",
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(F.data.startswith("settings:queue:"))
 async def settings_queue_start(callback: CallbackQuery, state: FSMContext):
     if await deny_if_not_member(callback):
@@ -694,7 +701,6 @@ async def settings_queue_start(callback: CallbackQuery, state: FSMContext):
     if chore not in CHORES:
         await callback.answer("Неизвестная задача.", show_alert=True)
         return
-
     await state.clear()
     await state.set_state(SetupQueue.choosing_first)
     await state.update_data(chore=chore)
@@ -705,8 +711,6 @@ async def settings_queue_start(callback: CallbackQuery, state: FSMContext):
         reply_markup=member_choice_keyboard(f"queue_first:{chore}"),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(SetupQueue.choosing_first, F.data.startswith("queue_first:"))
 async def settings_queue_first(callback: CallbackQuery, state: FSMContext):
     if await deny_if_not_member(callback):
@@ -717,7 +721,6 @@ async def settings_queue_first(callback: CallbackQuery, state: FSMContext):
     if not first:
         await callback.answer("Неизвестный пользователь.", show_alert=True)
         return
-
     await state.update_data(chore=chore, first_id=first_id)
     await state.set_state(SetupQueue.choosing_second)
     await callback.answer()
@@ -726,8 +729,6 @@ async def settings_queue_first(callback: CallbackQuery, state: FSMContext):
         reply_markup=member_choice_keyboard(f"queue_second:{chore}", exclude_id=first_id),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(SetupQueue.choosing_second, F.data.startswith("queue_second:"))
 async def settings_queue_second(callback: CallbackQuery, state: FSMContext):
     if await deny_if_not_member(callback):
@@ -736,17 +737,14 @@ async def settings_queue_second(callback: CallbackQuery, state: FSMContext):
     second_id = int(user_id_raw)
     data = await state.get_data()
     first_id = int(data["first_id"])
-
     if second_id == first_id or second_id not in MEMBERS_BY_ID:
         await callback.answer("Выбери другого участника.", show_alert=True)
         return
-
     third_id = next(member["id"] for member in MEMBERS if member["id"] not in (first_id, second_id))
     ordered = [MEMBERS_BY_ID[first_id], MEMBERS_BY_ID[second_id], MEMBERS_BY_ID[third_id]]
     set_queue(chore, ordered)
     reset_current_week_task(chore)
     await state.clear()
-
     await callback.answer("Очередь сохранена!")
     await callback.message.answer(
         f"✅ Очередь для <b>{CHORES[chore]['short'].lower()}</b> сохранена:\n\n"
@@ -757,8 +755,6 @@ async def settings_queue_second(callback: CallbackQuery, state: FSMContext):
         reply_markup=settings_keyboard(),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(F.data == "settings:bathroom_interval")
 async def bathroom_interval_menu(callback: CallbackQuery, state: FSMContext):
     if await deny_if_not_member(callback):
@@ -772,8 +768,6 @@ async def bathroom_interval_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=interval_keyboard(),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(F.data.startswith("interval:"))
 async def bathroom_interval_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_not_member(callback):
@@ -784,7 +778,6 @@ async def bathroom_interval_callback(callback: CallbackQuery, state: FSMContext)
         await callback.answer()
         await callback.message.answer("Напиши одним числом, через сколько дней снова мыть ванную. Например: <b>17</b>", parse_mode="HTML")
         return
-
     days = int(value)
     set_setting("bathroom_interval_days", str(days))
     await state.clear()
@@ -794,8 +787,6 @@ async def bathroom_interval_callback(callback: CallbackQuery, state: FSMContext)
         reply_markup=settings_keyboard(),
         parse_mode="HTML",
     )
-
-
 @dp.message(BathroomInterval.waiting_custom_days)
 async def bathroom_interval_custom(message: Message, state: FSMContext):
     if await deny_if_not_member(message):
@@ -805,11 +796,9 @@ async def bathroom_interval_custom(message: Message, state: FSMContext):
     except (ValueError, AttributeError):
         await message.answer("Нужно прислать одно целое число, например <b>17</b>.", parse_mode="HTML")
         return
-
     if not 1 <= days <= 365:
         await message.answer("Давай число от 1 до 365 дней 🙂")
         return
-
     set_setting("bathroom_interval_days", str(days))
     await state.clear()
     next_due = next_bathroom_due_at()
@@ -821,15 +810,11 @@ async def bathroom_interval_custom(message: Message, state: FSMContext):
         reply_markup=settings_keyboard(),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(F.data == "settings:cancel")
 async def settings_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Отменено")
     await callback.message.answer("⚙️ Настройки", reply_markup=settings_keyboard())
-
-
 @dp.message(Command("setup_floor"))
 async def setup_floor_cmd(message: Message, state: FSMContext):
     if await deny_if_not_member(message):
@@ -841,8 +826,6 @@ async def setup_floor_cmd(message: Message, state: FSMContext):
         "🧹 Кто моет пол первым?",
         reply_markup=member_choice_keyboard("queue_first:floor"),
     )
-
-
 @dp.message(Command("setup_bathroom"))
 async def setup_bathroom_cmd(message: Message, state: FSMContext):
     if await deny_if_not_member(message):
@@ -854,8 +837,6 @@ async def setup_bathroom_cmd(message: Message, state: FSMContext):
         "🛁 Кто идёт первым по ванной?",
         reply_markup=member_choice_keyboard("queue_first:bathroom"),
     )
-
-
 @dp.message(Command("bathroom_interval"))
 async def bathroom_interval_cmd(message: Message, state: FSMContext):
     if await deny_if_not_member(message):
@@ -873,7 +854,6 @@ async def bathroom_interval_cmd(message: Message, state: FSMContext):
         set_setting("bathroom_interval_days", str(days))
         await message.answer(f"✅ Интервал ванной: {days} дней.")
         return
-
     current = get_bathroom_interval_days()
     await state.clear()
     await message.answer(
@@ -881,75 +861,95 @@ async def bathroom_interval_cmd(message: Message, state: FSMContext):
         reply_markup=interval_keyboard(),
         parse_mode="HTML",
     )
-
-
-
 @dp.message(Command("done"))
 async def manual_done_cmd(message: Message):
     if await deny_if_not_member(message):
         return
-
     await message.answer(
         "✅ <b>Что ты уже убрал(а)?</b>\n\n"
         "Отметить выполнение может только тот, чья сейчас очередь.",
         reply_markup=manual_done_keyboard(),
         parse_mode="HTML",
     )
-
-
 @dp.callback_query(F.data == "manual_done:cancel")
 async def manual_done_cancel(callback: CallbackQuery):
     await callback.answer("Отменено")
     await callback.message.edit_reply_markup(reply_markup=None)
-
-
 @dp.callback_query(F.data.startswith("manual_done:"))
 async def manual_done_callback(callback: CallbackQuery):
     if await deny_if_not_member(callback):
         return
-
     chore = callback.data.split(":", 1)[1]
     if chore not in CHORES:
         return
-
+    queue_member = get_queue_member(chore)
+    if queue_member["id"] != callback.from_user.id:
+        await callback.answer(
+            f"Сейчас очередь: {queue_member['name']}.",
+            show_alert=True,
+        )
+        return
+    await callback.answer()
+    await callback.message.answer(
+        f"{CHORES[chore]['emoji']} "
+        f"<b>{CHORES[chore]['short']}</b>\n\n"
+        "Когда ты убрал(а)?",
+        reply_markup=manual_done_date_keyboard(chore),
+        parse_mode="HTML",
+    )
+@dp.callback_query(F.data.startswith("manual_done_date:"))
+async def manual_done_date_callback(callback: CallbackQuery):
+    if await deny_if_not_member(callback):
+        return
+    _, chore, date_type = callback.data.split(":", 2)
+    now = datetime.now(TZ)
+    if date_type == "today":
+        completed_at = now
+    elif date_type == "yesterday":
+        completed_at = now - timedelta(days=1)
+    else:
+        await callback.answer(
+            "Неизвестная дата.",
+            show_alert=True,
+        )
+        return
     ok, error, next_member = manual_complete_chore(
         chore,
         callback.from_user.id,
+        completed_at,
     )
-
     if not ok:
-        await callback.answer(error, show_alert=True)
+        await callback.answer(
+            error,
+            show_alert=True,
+        )
         return
-
     current_member = MEMBERS_BY_ID[callback.from_user.id]
     await callback.answer("Отмечено!")
-    await callback.message.edit_reply_markup(reply_markup=None)
-
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
     extra = ""
     if chore == "bathroom":
         next_due = next_bathroom_due_at()
         if next_due:
             extra = (
-                f"\nСледующая ванная станет актуальной после "
+                f"\nСледующая ванная — примерно "
                 f"<b>{next_due:%d.%m.%Y}</b>."
             )
-
     await callback.message.answer(
         f"✅ {mention(current_member)} отметил(а): "
-        f"<b>{CHORES[chore]['title']}</b> выполнено.\n"
+        f"<b>{CHORES[chore]['title']}</b> выполнено "
+        f"{completed_at:%d.%m.%Y}.\n"
         f"Следующий в очереди: {mention(next_member)}."
         f"{extra}",
         parse_mode="HTML",
     )
-
-
 @dp.message(Command("status"))
 async def status_cmd(message: Message):
     iso_year, iso_week = week_now()
-
     floor = get_or_create_weekly_task("floor", iso_year, iso_week)
     floor_text = mention(floor) if floor["status"] == "pending" else "✅ уже выполнено"
-
     bathroom_task = get_or_create_weekly_task("bathroom", iso_year, iso_week)
     if bathroom_task is None:
         next_due = next_bathroom_due_at()
@@ -962,7 +962,6 @@ async def status_cmd(message: Message):
         bathroom_text = "✅ уже выполнено"
     else:
         bathroom_text = mention(bathroom_task)
-
     interval = get_bathroom_interval_days()
     await message.answer(
         f"🧹 <b>Пол:</b> {floor_text}\n"
@@ -972,8 +971,6 @@ async def status_cmd(message: Message):
         f"Интервал: {interval} дн.",
         parse_mode="HTML",
     )
-
-
 @dp.message(Command("history"))
 async def history_cmd(message: Message):
     rows = fetch_all(
@@ -987,55 +984,119 @@ async def history_cmd(message: Message):
     if not rows:
         await message.answer("История пока пустая.")
         return
-
     lines = ["📋 Последние действия:"]
     for row in rows:
         dt = datetime.fromisoformat(row["created_at"]).astimezone(TZ)
         action = "✅ сделано" if row["event_type"] == "done" else "⏭️ пропуск"
         lines.append(f"• {dt:%d.%m}: {CHORES[row['chore']]['title']} — {row['user_name']} — {action}")
     await message.answer("\n".join(lines))
-
-
 @dp.message(Command("test"))
 async def test_cmd(message: Message):
     if await deny_if_not_member(message):
         return
     iso_year, iso_week = week_now()
     await send_chore_message("floor", "🧪 Тестовое напоминание", iso_year, iso_week)
-    if bathroom_due():
+    if bathroom_due_this_week():
         await send_chore_message("bathroom", "🧪 Тестовое напоминание", iso_year, iso_week)
     else:
         await message.answer("🧪 Пол отправлен. Ванная пока ещё не подошла по интервалу.")
-
-
 @dp.callback_query(F.data.startswith("done:"))
 async def done_callback(callback: CallbackQuery):
-    _, chore, clicked_id_raw = callback.data.split(":", 2)
-    clicked_id = int(clicked_id_raw)
+    parsed = parse_task_callback(callback.data, callback.message.date)
+    if not parsed:
+        await callback.answer("Не удалось прочитать эту кнопку.", show_alert=True)
+        return
+
+    _, chore, clicked_id, iso_year, iso_week = parsed
 
     if chore not in CHORES:
         await callback.answer("Неизвестная задача.", show_alert=True)
         return
 
-    iso_year, iso_week = week_now()
-    task = get_or_create_weekly_task(chore, iso_year, iso_week)
-    if not task or task["status"] == "done":
-        await callback.answer("Эта задача уже закрыта.", show_alert=True)
+    current_year, current_week = week_now()
+    current_monday = datetime.fromisocalendar(current_year, current_week, 1).date()
+    target_monday = datetime.fromisocalendar(iso_year, iso_week, 1).date()
+    weeks_ago = (current_monday - target_monday).days // 7
+
+    if weeks_ago < 0:
+        await callback.answer("Эта задача относится к будущей неделе.", show_alert=True)
         return
+
+    if weeks_ago > 1:
+        await callback.answer(
+            "Это слишком старое напоминание. Используй /done.",
+            show_alert=True,
+        )
+        return
+
+    row = fetch_one(
+        """
+        SELECT user_id, user_name, status
+        FROM weekly_tasks
+        WHERE iso_year = :year AND iso_week = :week AND chore = :chore
+        """,
+        {"year": iso_year, "week": iso_week, "chore": chore},
+    )
+
+    if not row or row["status"] == "done":
+        await callback.answer("Эта задача уже закрыта или больше не актуальна.", show_alert=True)
+        return
+
+    task = {
+        "id": int(row["user_id"]),
+        "name": row["user_name"],
+        "status": row["status"],
+    }
 
     if callback.from_user.id != clicked_id or task["id"] != clicked_id:
         await callback.answer("Эта кнопка для текущего дежурного 🙂", show_alert=True)
         return
 
-    record_event(chore, task, "done")
+    now = datetime.now(TZ)
+
+    if (iso_year, iso_week) == (current_year, current_week):
+        completed_at = now
+    else:
+        # Если воскресную кнопку нажали уже в понедельник, считаем уборку
+        # выполненной в воскресенье той недели, к которой относилось напоминание.
+        completed_at = datetime.fromisocalendar(iso_year, iso_week, 7).replace(
+            hour=now.hour,
+            minute=now.minute,
+            second=now.second,
+            microsecond=0,
+            tzinfo=TZ,
+        )
+
+    record_event(chore, task, "done", occurred_at=completed_at)
     set_weekly_done(chore, iso_year, iso_week)
     advance_turn(chore)
+
+    # При поздней отметке старая очередь могла уже попасть в pending-задачу
+    # новой недели через /status. Убираем её и даём новой неделе создаться
+    # заново на следующего участника.
+    if (iso_year, iso_week) != (current_year, current_week):
+        execute(
+            """
+            DELETE FROM weekly_tasks
+            WHERE iso_year = :year
+              AND iso_week = :week
+              AND chore = :chore
+              AND status = 'pending'
+            """,
+            {
+                "year": current_year,
+                "week": current_week,
+                "chore": chore,
+            },
+        )
+
     next_member = get_queue_member(chore)
 
     extra = ""
     if chore == "bathroom":
-        next_due = datetime.now(TZ) + timedelta(days=get_bathroom_interval_days())
-        extra = f"\nСледующая ванная станет актуальной после <b>{next_due:%d.%m.%Y}</b>."
+        next_due = next_bathroom_due_at()
+        if next_due:
+            extra = f"\nСледующая ванная станет актуальной примерно <b>{next_due:%d.%m.%Y}</b>."
 
     await callback.answer("Отмечено!")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -1048,18 +1109,43 @@ async def done_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip_callback(callback: CallbackQuery):
-    _, chore, clicked_id_raw = callback.data.split(":", 2)
-    clicked_id = int(clicked_id_raw)
+    parsed = parse_task_callback(callback.data, callback.message.date)
+    if not parsed:
+        await callback.answer("Не удалось прочитать эту кнопку.", show_alert=True)
+        return
+
+    _, chore, clicked_id, iso_year, iso_week = parsed
 
     if chore not in CHORES:
         await callback.answer("Неизвестная задача.", show_alert=True)
         return
 
-    iso_year, iso_week = week_now()
-    task = get_or_create_weekly_task(chore, iso_year, iso_week)
-    if not task or task["status"] == "done":
+    current_year, current_week = week_now()
+    if (iso_year, iso_week) != (current_year, current_week):
+        await callback.answer(
+            "Это старое напоминание. Актуальную очередь посмотри через /status.",
+            show_alert=True,
+        )
+        return
+
+    row = fetch_one(
+        """
+        SELECT user_id, user_name, status
+        FROM weekly_tasks
+        WHERE iso_year = :year AND iso_week = :week AND chore = :chore
+        """,
+        {"year": iso_year, "week": iso_week, "chore": chore},
+    )
+
+    if not row or row["status"] == "done":
         await callback.answer("Эта задача уже закрыта.", show_alert=True)
         return
+
+    task = {
+        "id": int(row["user_id"]),
+        "name": row["user_name"],
+        "status": row["status"],
+    }
 
     if callback.from_user.id != clicked_id or task["id"] != clicked_id:
         await callback.answer("Пропустить может только текущий дежурный.", show_alert=True)
@@ -1075,26 +1161,21 @@ async def skip_callback(callback: CallbackQuery):
     await callback.message.answer(
         f"⏭️ {mention(task)} пропускает: {CHORES[chore]['title']}.\n"
         f"Теперь задача у {mention(next_member)}.",
-        reply_markup=chore_keyboard(chore, next_member["id"]),
+        reply_markup=chore_keyboard(chore, next_member["id"], iso_year, iso_week),
         parse_mode="HTML",
     )
 
 
 async def health(request):
     return web.json_response({"ok": True, "service": "cleaning-bot"})
-
-
-
 def get_current_reminder_window(now: datetime):
     """
     Возвращает активное окно напоминания для текущего локального времени.
-
     Окна полуоткрытые: start <= hour < end.
     Например 10-12 означает с 10:00 до 11:59.
     """
     weekday = now.weekday()
     hour = now.hour
-
     windows = [
         (
             4,
@@ -1125,22 +1206,17 @@ def get_current_reminder_window(now: datetime):
             "⏰ Последнее напоминание на выходные.",
         ),
     ]
-
     for target_weekday, start_hour, end_hour, slug, prefix in windows:
         if weekday == target_weekday and start_hour <= hour < end_hour:
             return slug, prefix
-
     return None
-
 async def scheduler(request):
     provided = request.query.get("key", "")
     if not secrets.compare_digest(provided, SCHEDULER_KEY):
         raise web.HTTPUnauthorized(text="bad scheduler key")
-
     now = datetime.now(TZ)
     iso = now.isocalendar()
     iso_year, iso_week = iso.year, iso.week
-
     schedule = get_current_reminder_window(now)
     if not schedule:
         return web.json_response({
@@ -1149,7 +1225,6 @@ async def scheduler(request):
             "reason": "outside reminder window",
             "local_time": now.isoformat(),
         })
-
     slug, prefix = schedule
     sent = 0
     for chore in ("floor", "bathroom"):
@@ -1162,35 +1237,26 @@ async def scheduler(request):
         mark_notification_sent(key)
         if did_send:
             sent += 1
-
     return web.json_response({"ok": True, "sent": sent, "local_time": now.isoformat()})
-
-
-
 async def polling_scheduler_loop():
     """
     Фоновый планировщик для режима polling (локально и на Bothost).
-    Проверяет расписание раз в 30 секунд и отправляет напоминания
+    Проверяет расписание раз в 30 минут и отправляет напоминания
     только один раз на каждый слот благодаря sent_notifications.
     """
     while True:
         now = datetime.now(TZ)
         iso = now.isocalendar()
         iso_year, iso_week = iso.year, iso.week
-
         schedule = get_current_reminder_window(now)
-
         if schedule:
             slug, prefix = schedule
-
             for chore in ("floor", "bathroom"):
                 if not chore_due(chore):
                     continue
-
                 key = f"{iso_year}-W{iso_week}-{slug}-{chore}"
                 if notification_already_sent(key):
                     continue
-
                 did_send = await send_chore_message(
                     chore,
                     prefix,
@@ -1198,15 +1264,12 @@ async def polling_scheduler_loop():
                     iso_week,
                 )
                 mark_notification_sent(key)
-
                 if did_send:
                     print(
                         f"[scheduler] sent {chore}: "
                         f"{iso_year}-W{iso_week} {slug}"
                     )
-
         await asyncio.sleep(1800)
-
 async def on_startup(app):
     init_db()
     if LOCAL_MODE:
@@ -1221,47 +1284,33 @@ async def on_startup(app):
         drop_pending_updates=False,
     )
     print(f"Webhook set: {webhook_url}")
-
-
 async def on_shutdown(app):
     await bot.session.close()
-
-
 def create_app():
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/scheduler", scheduler)
-
     SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
         secret_token=WEBHOOK_SECRET,
     ).register(app, path="/telegram/webhook")
-
     setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     return app
-
-
 async def run_local():
     init_db()
-
     scheduler_task = None
-
     try:
         # На Bothost и локально работаем через long polling.
         # На сервере BOT_PROXY не задаём — соединение с Telegram идёт напрямую.
         await bot.delete_webhook(drop_pending_updates=False)
-
         scheduler_task = asyncio.create_task(polling_scheduler_loop())
-
         print("Bot started in polling mode")
         print("Background cleaning scheduler started")
-
         await dp.start_polling(bot)
-
     finally:
         if scheduler_task:
             scheduler_task.cancel()
@@ -1269,10 +1318,7 @@ async def run_local():
                 await scheduler_task
             except asyncio.CancelledError:
                 pass
-
         await bot.session.close()
-
-
 if __name__ == "__main__":
     if LOCAL_MODE:
         asyncio.run(run_local())
